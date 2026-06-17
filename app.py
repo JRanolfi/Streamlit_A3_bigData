@@ -3,8 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from pysus import sim
 from datetime import datetime
+import os
 
 # Configuração da página
 st.set_page_config(
@@ -23,9 +23,9 @@ with st.sidebar:
     st.markdown("Dados de 2020 a 2023")
     st.markdown("---")
     st.subheader("Fontes:")
-    st.write("- SIM (Sistema de Informações sobre Mortalidade)")
-    st.write("- WCOTA (dados de vacinação)")
-    st.write("- Despesas Governo da Bahia")
+    st.write("- SIM (Sistema de Informações sobre Mortalidade) - Local")
+    st.write("- WCOTA (dados de vacinação) - Local")
+    st.write("- Despesas Governo da Bahia - Local")
     
     if st.button("🔄 Atualizar Dados"):
         st.cache_data.clear()
@@ -34,19 +34,22 @@ with st.sidebar:
 # Cache para carregar dados
 @st.cache_data
 def load_obitos_data():
-    """Carrega dados de óbitos"""
+    """Carrega dados de óbitos do arquivo local"""
     with st.spinner("Carregando dados de óbitos..."):
-        dataframes = []
-        for year in [2020, 2021, 2022, 2023]:
-            df_year = sim(state="BA", year=year)
-            dataframes.append(df_year)
-        obitos_bruto = pd.concat(dataframes, ignore_index=True)
+        # Verificar se o arquivo existe
+        if not os.path.exists('dados/dados_obitos.csv'):
+            st.error("Arquivo 'dados/dados_obitos.csv' não encontrado!")
+            st.info("Execute o script 'baixar_dados.py' primeiro.")
+            return None
         
-        covid = obitos_bruto[obitos_bruto["CAUSABAS"] == "B342"].copy()
-        covid = covid[["DTOBITO", "IDADE", "SEXO"]]
+        # Carregar do CSV
+        covid = pd.read_csv('dados/dados_obitos.csv')
+        
+        # Processar datas
         covid["DTOBITO"] = pd.to_datetime(covid["DTOBITO"], format="%d%m%Y", errors="coerce")
         covid["IDADE"] = pd.to_numeric(covid["IDADE"], errors="coerce")
         
+        # Calcular idade em anos
         unidade = covid["IDADE"] // 100
         valor = covid["IDADE"] % 100
         
@@ -63,25 +66,40 @@ def load_obitos_data():
 
 @st.cache_data
 def load_vacinas_data():
-    """Carrega dados de vacinação"""
+    """Carrega dados de vacinação do arquivo local"""
     with st.spinner("Carregando dados de vacinação..."):
-        url_vacina = "https://raw.githubusercontent.com/wcota/covid19br/master/cases-brazil-states.csv"
-        vacinas_bruto = pd.read_csv(url_vacina)
-        vacinas_ba = vacinas_bruto[vacinas_bruto["state"] == "BA"].copy()
+        # Verificar se o arquivo existe
+        if not os.path.exists('dados/dados_vacinas.csv'):
+            st.error("Arquivo 'dados/dados_vacinas.csv' não encontrado!")
+            st.info("Execute o script 'baixar_dados.py' primeiro.")
+            return None, None
+        
+        # Carregar do CSV
+        vacinas_ba = pd.read_csv('dados/dados_vacinas.csv')
         vacinas_ba["date"] = pd.to_datetime(vacinas_ba["date"])
         vacinas_ba["ANO"] = vacinas_ba["date"].dt.year
+        
+        # Calcular doses por ano
         doses_por_ano = vacinas_ba.groupby("ANO")["vaccinated"].max().reset_index()
         doses_por_ano.columns = ["ANO", "DOSES"]
+        
         return vacinas_ba, doses_por_ano
 
 @st.cache_data
 def load_despesas_data():
-    """Carrega dados de despesas"""
+    """Carrega dados de despesas do arquivo local"""
     with st.spinner("Carregando dados de despesas..."):
-        url = "https://raw.githubusercontent.com/erickassis/despesas_bahia_2019_2023/refs/heads/main/despesas.csv"
-        despesas = pd.read_csv(url)
+        # Verificar se o arquivo existe
+        if not os.path.exists('dados/despesas.csv'):
+            st.error("Arquivo 'dados/despesas.csv' não encontrado!")
+            st.info("Execute o script 'baixar_dados.py' primeiro.")
+            return None, None
+        
+        # Carregar do CSV
+        despesas = pd.read_csv('dados/despesas.csv')
         despesas = despesas[(despesas["Ano"] >= 2020) & (despesas['Ano'] <= 2023)].copy()
         
+        # Limpar valores
         despesas["Valor Pago"] = (
             despesas["Valor Pago"]
             .str.replace("R$", "", regex=False)
@@ -91,6 +109,7 @@ def load_despesas_data():
         )
         despesas["Valor Pago"] = pd.to_numeric(despesas["Valor Pago"], errors="coerce")
         
+        # Calcular gasto por ano
         gasto_por_ano = despesas.groupby("Ano")["Valor Pago"].sum().reset_index()
         gasto_por_ano["Valor Pago"] = gasto_por_ano["Valor Pago"] / 1_000_000
         gasto_por_ano.columns = ["ANO", "GASTO_MILHOES"]
@@ -102,6 +121,11 @@ try:
     covid = load_obitos_data()
     vacinas_ba, doses = load_vacinas_data()
     despesas, gastos = load_despesas_data()
+    
+    # Verificar se os dados foram carregados corretamente
+    if covid is None or vacinas_ba is None or despesas is None:
+        st.error("Erro ao carregar dados. Verifique se os arquivos existem em 'dados/'.")
+        st.stop()
     
     # Criar tabela consolidada
     obitos_por_ano = covid.groupby("ANO").size().reset_index(name="OBITOS")
@@ -138,7 +162,6 @@ try:
         }
 
         despesas["Mes_numeric"] = despesas["Nome do Mês"].str.lower().map(month_mapping)
-
         despesas["Mes"] = pd.to_datetime(
             despesas["Ano"].astype(str) + "-" + despesas["Mes_numeric"].astype(str).str.zfill(2) + "-01"
         )
@@ -148,14 +171,14 @@ try:
         gasto_mensal["GASTO_MILHOES"] = gasto_mensal["GASTO_MILHOES"] / 1_000_000
         gasto_mensal = gasto_mensal.sort_values("DATA_MES")
 
-        # ── Preparo dos dados mensais de óbitos ─────────────────────────────────────
+        # Preparo dos dados mensais de óbitos
         obitos_mes = covid.groupby(["ANO", "MES"]).size().reset_index(name="OBITOS")
         obitos_mes["DATA"] = pd.to_datetime(
             obitos_mes["ANO"].astype(str) + "-" + obitos_mes["MES"].astype(str).str.zfill(2) + "-01"
         )
         obitos_mes = obitos_mes.sort_values("DATA")
 
-        # ── Preparo dos dados mensais de vacinas ────────────────────────────────────
+        # Preparo dos dados mensais de vacinas
         vacinas_ba["DATA_MES"] = vacinas_ba["date"].dt.to_period("M").dt.to_timestamp()
         doses_mes = (
             vacinas_ba.groupby("DATA_MES")["vaccinated"]
@@ -164,10 +187,9 @@ try:
             .sort_values("DATA_MES")
         )
         doses_mes["DOSES_NOVAS"] = doses_mes["vaccinated"].diff().clip(lower=0)
-        doses_mes["DOSES_NOVAS_MILHOES"] = doses_mes["DOSES_NOVAS"] / 1_000_000  # <-- Doses em milhões
+        doses_mes["DOSES_NOVAS_MILHOES"] = doses_mes["DOSES_NOVAS"] / 1_000_000
         doses_mes = doses_mes[doses_mes["DATA_MES"].dt.year >= 2020]
         
-        # Criar gráfico
         # Criar gráfico
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
@@ -183,7 +205,7 @@ try:
             secondary_y=False
         )
 
-        # Linha - Doses (agora em valores absolutos)
+        # Linha - Doses
         fig.add_trace(
             go.Scatter(
                 x=doses_mes["DATA_MES"],
@@ -253,8 +275,7 @@ try:
                     f"Mês: {gasto_mensal.loc[gasto_mensal['GASTO_MILHOES'].idxmax(), 'DATA_MES'].strftime('%b/%Y')}"
                 )
 
-    
-    # TAB 3 - PERFIL DAS VÍTIMAS
+    # TAB 2 - PERFIL DAS VÍTIMAS
     with tab2:
         st.header("Perfil das Vítimas")
         
@@ -287,7 +308,6 @@ try:
             fig.update_traces(line_color="#E76F51", marker_color="#E76F51")
             st.plotly_chart(fig, use_container_width=True)
 
-        
     # Rodapé
     st.markdown("---")
     st.markdown(f"*Dados atualizados em: {datetime.now().strftime('%d/%m/%Y %H:%M')}*")
@@ -295,4 +315,4 @@ try:
 
 except Exception as e:
     st.error(f"Erro ao carregar dados: {str(e)}")
-    st.info("Verifique sua conexão com a internet e recarregue a página.")
+    st.info("Verifique se os arquivos estão na pasta 'dados/' e tente novamente.")
