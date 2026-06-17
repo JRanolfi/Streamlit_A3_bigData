@@ -145,7 +145,7 @@ try:
 
         gasto_mensal = despesas.groupby("Mes")["Valor Pago"].sum().reset_index()
         gasto_mensal.columns = ["DATA_MES", "GASTO_MILHOES"]
-        gasto_mensal["GASTO_MILHOES"] = gasto_mensal["GASTO_MILHOES"] / 6_500
+        gasto_mensal["GASTO_MILHOES"] = gasto_mensal["GASTO_MILHOES"] / 1_000_000
         gasto_mensal = gasto_mensal.sort_values("DATA_MES")
 
         # ── Preparo dos dados mensais de óbitos ─────────────────────────────────────
